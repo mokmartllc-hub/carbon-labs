@@ -134,7 +134,6 @@
       if (!session) return;
       currentUser = mapUser(session.user);
       updateNavAuth();
-      if (typeof refreshAdminAccess === 'function') refreshAdminAccess();
       const items = await loadCart();
       if (items.length) {
         cart = mergeCarts(cart, items);
@@ -823,32 +822,13 @@
       if (links[0]) links[0].setAttribute('onclick', "go('account')");
       if (links[1]) links[1].setAttribute('onclick', "go('orders')");
     }
-    if (typeof refreshAdminAccess === 'function') {
-      refreshAdminAccess().then(() => {
-        if (typeof appendAdminNavLink === 'function') appendAdminNavLink();
-      });
-    }
   };
 
   const origGo = window.go;
   window.go = function (pg) {
     if (pg === 'admin') {
-      if (!currentUser) {
-        authReturnAction = 'admin';
-        origGo('auth');
-        return;
-      }
-      if (typeof refreshAdminAccess === 'function') {
-        refreshAdminAccess().then((ok) => {
-          if (!ok) {
-            const email = window._adminCheckEmail || currentUser?.email || 'your account';
-            alert('You do not have admin access for ' + email + '. Sign in with mokmartllc@gmail.com or ask to be granted admin.');
-            return;
-          }
-          origGo('admin');
-          if (typeof renderAdminPage === 'function') renderAdminPage();
-        });
-      }
+      origGo('admin');
+      if (typeof renderAdminPage === 'function') renderAdminPage();
       return;
     }
     if ((pg === 'account' || pg === 'orders') && !currentUser) {

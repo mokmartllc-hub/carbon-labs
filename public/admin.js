@@ -24,37 +24,83 @@
     return typeof getSupabase === 'function' ? getSupabase() : null;
   }
 
-  async function checkAdmin() {
-    try {
-      const client = getClient();
-      if (!client) {
-        isAdmin = false;
-        return false;
-      }
-      const {
-        data: { user },
-      } = await client.auth.getUser();
-      if (!user) {
-        isAdmin = false;
-        return false;
-      }
-      const { data, error } = await client
-        .from('profiles')
-        .select('is_admin')
-        .eq('id', user.id)
-        .maybeSingle();
-      if (error) throw error;
-      isAdmin = !!data?.is_admin;
-      window._adminCheckEmail = user.email || '';
-      return isAdmin;
-    } catch (e) {
-      console.warn('Admin check failed', e);
-      isAdmin = false;
-      return false;
-    }
+  function getAdminPass() {
+    return sessionStorage.getItem('cl_admin_pass') || '';
   }
 
-  window.refreshAdminAccess = checkAdmin;
+  function adminSessionActive() {
+    return sessionStorage.getItem('cl_admin') === '1' && !!getAdminPass();
+  }
+
+  function renderAdminLogin() {
+    const root = document.getElementById('admin-root');
+    if (!root) return;
+    root.innerHTML = `
+      <div class="admin-card" style="max-width:420px;margin:40px auto">
+        <h2>Admin login</h2>
+        <p class="acct-sub">Enter the admin password to manage products, orders, and stock.</p>
+        <div class="auth-err" id="admin-login-err"></div>
+        <div class="auth-field">
+          <label>Password</label>
+          <input class="auth-input" id="admin-pass" type="password" placeholder="Admin password"
+            onkeydown="if(event.key==='Enter')submitAdminPassword()">
+        </div>
+        <button class="auth-btn" style="width:100%;margin-top:8px" onclick="submitAdminPassword()">Unlock admin →</button>
+      </div>`;
+    document.getElementById('admin-pass')?.focus();
+  }
+
+  window.submitAdminPassword = async function () {
+    const err = document.getElementById('admin-login-err');
+    const pwd = document.getElementById('admin-pass')?.value || '';
+    err?.classList.remove('show');
+    if (!pwd) {
+      if (err) {
+        err.textContent = 'Enter the admin password.';
+        err.classList.add('show');
+      }
+      return;
+    }
+    if (window.ADMIN_PASSWORD && pwd !== window.ADMIN_PASSWORD) {
+      if (err) {
+        err.textContent = 'Incorrect password.';
+        err.classList.add('show');
+      }
+      return;
+    }
+    const client = getClient();
+    if (!client) {
+      if (err) {
+        err.textContent = 'Supabase is not configured.';
+        err.classList.add('show');
+      }
+      return;
+    }
+    const { data, error } = await client.rpc('admin_verify', { pass: pwd });
+    if (error || !data) {
+      if (err) {
+        err.textContent = error ? errMsg(error) : 'Incorrect password.';
+        err.classList.add('show');
+      }
+      return;
+    }
+    sessionStorage.setItem('cl_admin', '1');
+    sessionStorage.setItem('cl_admin_pass', pwd);
+    isAdmin = true;
+    renderAdminPage();
+  };
+
+  window.adminLock = function () {
+    sessionStorage.removeItem('cl_admin');
+    sessionStorage.removeItem('cl_admin_pass');
+    isAdmin = false;
+    renderAdminLogin();
+  };
+
+  window.refreshAdminAccess = async function () {
+    isAdmin = adminSessionActive();
+    return isAdmin;
+  };
 
   function adminNav() {
     const tabs = [
@@ -69,7 +115,7 @@
         ([id, label]) =>
           `<button type="button" class="admin-tab ${adminTab === id ? 'active' : ''}" onclick="setAdminTab('${id}')">${label}</button>`
       )
-      .join('')}</nav>`;
+      .join('')}<button type="button" class="admin-tab" style="margin-left:auto" onclick="adminLock()">Lock</button></nav>`;
   }
 
   window.setAdminTab = function (tab) {
@@ -78,30 +124,18 @@
   };
 
   async function loadDashboard() {
-    const client = getClient();
-    const [orders, products, messages, subs] = await Promise.all([
-      client.from('orders').select('total, created_at', { count: 'exact' }),
-      client.from('products').select('id, sizes'),
-      client.from('contact_messages').select('id', { count: 'exact', head: true }),
-      client.from('newsletter_subscribers').select('id', { count: 'exact', head: true }),
-    ]);
-    const orderList = orders.data || [];
-    const revenue = orderList.reduce((s, o) => s + Number(o.total), 0);
-    const lowStock = [];
-    (products.data || []).forEach((p) => {
-      (p.sizes || []).forEach((s) => {
-        if (s.stock != null && Number(s.stock) <= 5) {
-          lowStock.push(`${p.id} · ${s.l}`);
-        }
-      });
-    });
+    const pass = getAdminPass();
+    const { data, error } = await getClient().rpc('admin_get_stats', { pass });
+    if (error) throw error;
+    const stats = data || {};
+    const lowStock = stats.low_stock || [];
     return `
       <div class="admin-stats">
-        <div class="admin-stat"><div class="n">${orders.count ?? orderList.length}</div><div class="l">Orders</div></div>
-        <div class="admin-stat"><div class="n">${fmtMoney(revenue)}</div><div class="l">Revenue</div></div>
-        <div class="admin-stat"><div class="n">${products.data?.length || 0}</div><div class="l">Products</div></div>
-        <div class="admin-stat"><div class="n">${messages.count ?? 0}</div><div class="l">Messages</div></div>
-        <div class="admin-stat"><div class="n">${subs.count ?? 0}</div><div class="l">Subscribers</div></div>
+        <div class="admin-stat"><div class="n">${stats.orders_count ?? 0}</div><div class="l">Orders</div></div>
+        <div class="admin-stat"><div class="n">${fmtMoney(stats.revenue ?? 0)}</div><div class="l">Revenue</div></div>
+        <div class="admin-stat"><div class="n">${stats.products_count ?? 0}</div><div class="l">Products</div></div>
+        <div class="admin-stat"><div class="n">${stats.messages_count ?? 0}</div><div class="l">Messages</div></div>
+        <div class="admin-stat"><div class="n">${stats.subscribers_count ?? 0}</div><div class="l">Subscribers</div></div>
       </div>
       ${
         lowStock.length
@@ -111,10 +145,7 @@
   }
 
   async function loadOrdersPanel() {
-    const { data, error } = await getClient()
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const { data, error } = await getClient().rpc('admin_list_orders', { pass: getAdminPass() });
     if (error) throw error;
     if (!data?.length) return '<div class="admin-empty">No orders yet.</div>';
     return `<div class="admin-table-wrap"><table class="admin-table">
@@ -138,7 +169,11 @@
 
   window.adminUpdateOrderStatus = async function (id, status) {
     try {
-      const { error } = await getClient().from('orders').update({ status }).eq('id', id);
+      const { error } = await getClient().rpc('admin_update_order', {
+        pass: getAdminPass(),
+        order_id: id,
+        new_status: status,
+      });
       if (error) throw error;
     } catch (e) {
       alert(errMsg(e));
@@ -146,7 +181,7 @@
   };
 
   async function loadProductsPanel() {
-    const { data, error } = await getClient().from('products').select('*').order('sort_order');
+    const { data, error } = await getClient().rpc('admin_list_products', { pass: getAdminPass() });
     if (error) throw error;
     const list = data || [];
   return `
@@ -185,8 +220,12 @@
     }
     const rows = source.map((p, i) => dbProductPayload(p, i));
     try {
-      const { error } = await getClient().from('products').upsert(rows);
-      if (error) throw error;
+      const client = getClient();
+      const pass = getAdminPass();
+      for (const row of rows) {
+        const { error } = await client.rpc('admin_upsert_product', { pass, payload: row });
+        if (error) throw error;
+      }
       await loadCatalogFromDb();
       alert('Catalog synced (' + rows.length + ' products).');
       renderAdminPage();
@@ -201,8 +240,8 @@
     if (!el) return;
     let p = null;
     if (id) {
-      const { data } = await getClient().from('products').select('*').eq('id', id).maybeSingle();
-      p = data;
+      const { data } = await getClient().rpc('admin_list_products', { pass: getAdminPass() });
+      p = (data || []).find((x) => x.id === id) || null;
     }
     if (!p) {
       p = {
@@ -333,7 +372,10 @@
     }
     err.classList.remove('show');
     try {
-      const { error } = await getClient().from('products').upsert(payload);
+      const { error } = await getClient().rpc('admin_upsert_product', {
+        pass: getAdminPass(),
+        payload,
+      });
       if (error) throw error;
       await loadCatalogFromDb();
       adminCloseEditor();
@@ -347,7 +389,10 @@
   window.adminDeleteProduct = async function (id) {
     if (!confirm('Delete product ' + id + '?')) return;
     try {
-      const { error } = await getClient().from('products').delete().eq('id', id);
+      const { error } = await getClient().rpc('admin_delete_product', {
+        pass: getAdminPass(),
+        product_id: id,
+      });
       if (error) throw error;
       await loadCatalogFromDb();
       renderAdminPage();
@@ -357,11 +402,7 @@
   };
 
   async function loadMessagesPanel() {
-    const { data, error } = await getClient()
-      .from('contact_messages')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(50);
+    const { data, error } = await getClient().rpc('admin_list_messages', { pass: getAdminPass() });
     if (error) throw error;
     if (!data?.length) return '<div class="admin-empty">No messages.</div>';
     return data
@@ -376,11 +417,7 @@
   }
 
   async function loadNewsletterPanel() {
-    const { data, error } = await getClient()
-      .from('newsletter_subscribers')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100);
+    const { data, error } = await getClient().rpc('admin_list_subscribers', { pass: getAdminPass() });
     if (error) throw error;
     if (!data?.length) return '<div class="admin-empty">No subscribers yet.</div>';
     return `<div class="admin-table-wrap"><table class="admin-table">
@@ -392,10 +429,11 @@
   window.renderAdminPage = async function () {
     const root = document.getElementById('admin-root');
     if (!root) return;
-    if (!isAdmin) {
-      root.innerHTML = '<div class="admin-empty">Access denied. Admin account required.</div>';
+    if (!adminSessionActive()) {
+      renderAdminLogin();
       return;
     }
+    isAdmin = true;
     root.innerHTML = adminNav() + '<div class="orders-loading">Loading…</div>';
     try {
       let body = '';
@@ -417,24 +455,9 @@
     go('admin');
   };
 
-  window.appendAdminNavLink = function () {
-    const dd = document.getElementById('user-dropdown');
-    if (!dd || !isAdmin) return;
-    if (dd.querySelector('[data-admin-link]')) return;
-    const sep = dd.querySelector('.ud-sep');
-    const adminLink = document.createElement('a');
-    adminLink.setAttribute('data-admin-link', '1');
-    adminLink.textContent = 'Admin';
-    adminLink.setAttribute('onclick', "go('admin')");
-    if (sep) dd.insertBefore(adminLink, sep);
-    else dd.appendChild(adminLink);
-  };
-
   setTimeout(() => {
-    loadCatalogFromDb();
-    checkAdmin().then(() => {
-      if (typeof appendAdminNavLink === 'function') appendAdminNavLink();
-    });
+    if (typeof loadCatalogFromDb === 'function') loadCatalogFromDb();
+    if (adminSessionActive()) isAdmin = true;
   }, 200);
 
   if (location.hash === '#admin') {
