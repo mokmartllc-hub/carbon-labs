@@ -25,18 +25,27 @@
   }
 
   async function checkAdmin() {
-    if (!currentUser) {
-      isAdmin = false;
-      return false;
-    }
     try {
-      const { data, error } = await getClient()
+      const client = getClient();
+      if (!client) {
+        isAdmin = false;
+        return false;
+      }
+      const {
+        data: { user },
+      } = await client.auth.getUser();
+      if (!user) {
+        isAdmin = false;
+        return false;
+      }
+      const { data, error } = await client
         .from('profiles')
         .select('is_admin')
-        .eq('id', currentUser.id)
+        .eq('id', user.id)
         .maybeSingle();
       if (error) throw error;
       isAdmin = !!data?.is_admin;
+      window._adminCheckEmail = user.email || '';
       return isAdmin;
     } catch (e) {
       console.warn('Admin check failed', e);

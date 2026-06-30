@@ -841,7 +841,8 @@
       if (typeof refreshAdminAccess === 'function') {
         refreshAdminAccess().then((ok) => {
           if (!ok) {
-            alert('You do not have admin access.');
+            const email = window._adminCheckEmail || currentUser?.email || 'your account';
+            alert('You do not have admin access for ' + email + '. Sign in with mokmartllc@gmail.com or ask to be granted admin.');
             return;
           }
           origGo('admin');
