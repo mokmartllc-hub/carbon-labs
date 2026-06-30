@@ -1,0 +1,7 @@
+public/config.js
+backend/carbon_labs.db
+.env
+.env.local
+.vercel
+node_modules/
+__pycache__/

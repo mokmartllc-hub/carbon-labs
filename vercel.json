@@ -1,0 +1,12 @@
+{
+  "buildCommand": "node scripts/inject-config.js",
+  "outputDirectory": "public",
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    }
+  ]
+}
