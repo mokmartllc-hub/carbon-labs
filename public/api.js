@@ -36,6 +36,7 @@
   function errMsg(error) {
     return error?.message || 'Request failed';
   }
+  window.errMsg = errMsg;
 
   function mergeCarts(local, remote) {
     const map = new Map();
@@ -84,6 +85,11 @@
     const origRm = window.rmC;
     const origSetQty = window.setCartQty;
     window.addC = function (p, sz, qty) {
+      const stock = typeof getProductStock === 'function' ? getProductStock(p.id, sz.l) : null;
+      if (stock != null && stock <= 0) {
+        alert('This item is out of stock.');
+        return;
+      }
       origAdd(p, sz, qty);
       scheduleCartSave();
     };
@@ -93,6 +99,16 @@
     };
     if (origSetQty) {
       window.setCartQty = function (k, delta) {
+        if (delta > 0) {
+          const ex = cart.find((i) => i.k === k);
+          if (ex && typeof getProductStock === 'function') {
+            const stock = getProductStock(ex.id, ex.size);
+            if (stock != null && ex.qty + delta > stock) {
+              alert('Not enough stock available.');
+              return;
+            }
+          }
+        }
         origSetQty(k, delta);
         scheduleCartSave();
       };
@@ -118,6 +134,7 @@
       if (!session) return;
       currentUser = mapUser(session.user);
       updateNavAuth();
+      if (typeof refreshAdminAccess === 'function') refreshAdminAccess();
       const items = await loadCart();
       if (items.length) {
         cart = mergeCarts(cart, items);
@@ -412,6 +429,16 @@
       err.classList.add('show');
       return;
     }
+    if (typeof getProductStock === 'function') {
+      for (const item of cart) {
+        const stock = getProductStock(item.id, item.size);
+        if (stock != null && item.qty > stock) {
+          err.textContent = `${item.name} (${item.size}) only has ${stock} in stock.`;
+          err.classList.add('show');
+          return;
+        }
+      }
+    }
     const btn = document.getElementById('co-submit');
     btn.textContent = 'Placing order…';
     btn.disabled = true;
@@ -457,6 +484,9 @@
       const dest = authReturnAction;
       authReturnAction = null;
       go(dest);
+    } else if (authReturnAction === 'admin') {
+      authReturnAction = null;
+      go('admin');
     } else go('home');
   };
 
@@ -793,10 +823,33 @@
       if (links[0]) links[0].setAttribute('onclick', "go('account')");
       if (links[1]) links[1].setAttribute('onclick', "go('orders')");
     }
+    if (typeof refreshAdminAccess === 'function') {
+      refreshAdminAccess().then(() => {
+        if (typeof appendAdminNavLink === 'function') appendAdminNavLink();
+      });
+    }
   };
 
   const origGo = window.go;
   window.go = function (pg) {
+    if (pg === 'admin') {
+      if (!currentUser) {
+        authReturnAction = 'admin';
+        origGo('auth');
+        return;
+      }
+      if (typeof refreshAdminAccess === 'function') {
+        refreshAdminAccess().then((ok) => {
+          if (!ok) {
+            alert('You do not have admin access.');
+            return;
+          }
+          origGo('admin');
+          if (typeof renderAdminPage === 'function') renderAdminPage();
+        });
+      }
+      return;
+    }
     if ((pg === 'account' || pg === 'orders') && !currentUser) {
       authReturnAction = pg;
       origGo('auth');
@@ -810,6 +863,9 @@
 
   wrapCartFns();
   restoreSession();
+  if (typeof loadCatalogFromDb === 'function') {
+    loadCatalogFromDb();
+  }
 
   try {
     const client = getSupabase();
