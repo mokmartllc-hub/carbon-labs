@@ -225,21 +225,26 @@
       btn.disabled = true;
     }
     try {
-      const { data, error } = await getSupabase().auth.signUp({
+      const client = getSupabase();
+      const { data, error } = await client.auth.signUp({
         email,
         password: pass,
         options: { data: { first_name: first, last_name: last } },
       });
       if (error) throw error;
+
+      let user = data.user;
       if (!data.session) {
-        document.getElementById('auth-success-title').textContent = 'Check Your Email';
-        document.getElementById('auth-success-msg').textContent =
-          'We sent a confirmation link to ' + email + '. Click it, then log in.';
-        switchAuthTab('success');
-        return;
+        const { data: signInData, error: signInError } = await client.auth.signInWithPassword({
+          email,
+          password: pass,
+        });
+        if (signInError) throw signInError;
+        user = signInData.user;
       }
-      currentUser = mapUser(data.user);
-      await saveCart();
+
+      currentUser = mapUser(user);
+      await syncCartAfterLogin();
       updateNavAuth();
       document.getElementById('auth-success-title').textContent = 'Account Created!';
       document.getElementById('auth-success-msg').textContent =
@@ -386,8 +391,7 @@
   window.openCheckout = function () {
     ensureCheckoutModal();
     const deal = calcDeal(cart);
-    const sub = cart.reduce((s, i) => s + i.price * i.qty, 0);
-    const total = sub - deal.savings;
+    const total = cartPayable(cart, deal);
     document.getElementById('co-total').textContent = '$' + total.toFixed(2);
     if (currentUser) {
       document.getElementById('co-name').value =
@@ -404,9 +408,10 @@
 
   window.placeOrder = async function () {
     const err = document.getElementById('checkout-err');
-    const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
-    const savings = calcDeal(cart).savings;
-    const total = subtotal - savings;
+    const subtotal = cartSubtotal(cart);
+    const deal = calcDeal(cart);
+    const savings = deal.savings;
+    const total = cartPayable(cart, deal);
     const payload = {
       user_id: currentUser.id,
       order_number: orderNumber(),
